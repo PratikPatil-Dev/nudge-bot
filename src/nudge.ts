@@ -41,7 +41,7 @@ const LINES: Record<Level, ((s: Stats, remaining: number, mins: number, left: st
   ],
   firm: [
     (s, r, m, left) => `You're behind on ${s.id}: ${s.done}/${s.target}, ${left} left. ${r} more ≈ ${m} min. Block the time now.`,
-    (s, _r, m) => `${s.id}: ${s.done}/${s.target}. Remember why: ${s.why}. Take ${m} min and do it.`,
+    (s, _r, m) => `${s.id}: ${s.done}/${s.target}. Remember why: ${s.why}. It's about ${m} min in total; start with one.`,
     (s, r, m) => `Falling behind pace on ${s.id}. ${r} left to hit ${s.target}. It's ~${m} min, not a big ask.`,
   ],
   last: [
@@ -57,7 +57,7 @@ export function template(level: Level, s: Stats) {
   const remaining = s.target - s.done;
   let msg = line(s, remaining, remaining * s.minsPerUnit, fmtLeft(s.minsLeft));
   if (level === "last" && s.streak > 0) msg += ` Don't break your ${s.streak}-day streak.`;
-  if (level === "last" && s.warnPartner) msg += ` Hit /done or I'm telling ${s.warnPartner} (/excuse if you've got a real reason).`;
+  if (level === "last" && s.warnPartner) msg += ` If it's still short when the window closes, ${s.warnPartner} gets a note (/excuse if there's a real reason).`;
   return msg;
 }
 
@@ -87,6 +87,9 @@ export function remember(note: string, day: string) {
 
 const llmEnabled = process.env.LLM_ENABLED === "true";
 const model = process.env.LLM_MODEL;
+// Optional. Thinking models (e.g. gemini-3.8-flash) spend the reply budget thinking and get cut off; "none" turns that off.
+// Leave unset for models that don't think or don't accept the parameter.
+const reasoningEffort = process.env.LLM_REASONING_EFFORT || undefined;
 if (llmEnabled && (!process.env.LLM_API_KEY || !model)) throw new Error("LLM_ENABLED=true needs LLM_API_KEY and LLM_MODEL");
 const llm = llmEnabled
   ? new OpenAI({ apiKey: process.env.LLM_API_KEY, baseURL: process.env.LLM_BASE_URL || undefined, timeout: 15_000, maxRetries: 1 })
@@ -137,12 +140,17 @@ async function write(job: Job): Promise<string> {
   try {
     const res = await llm.chat.completions.create({
       model,
-      max_tokens: 300,
+      max_tokens: 1024, // replies are ~60 tokens; headroom so a thinking model isn't cut off mid-sentence
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort as OpenAI.ReasoningEffort } : {}),
       messages: [
         { role: "system", content: `${SYSTEM}\n\n# Profile\n${profile || "(empty)"}` },
         { role: "user", content: prompt },
       ],
     });
+    if (res.choices[0]?.finish_reason === "length") {
+      console.warn("llm: reply cut off at the token limit (set LLM_REASONING_EFFORT=none for thinking models), using template");
+      return job.fallback;
+    }
     const text = res.choices[0]?.message?.content?.trim();
     if (!text) {
       console.warn("llm: empty reply, using template");
