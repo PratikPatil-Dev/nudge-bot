@@ -11,6 +11,7 @@ import {
   type Level,
   type LastPing,
   missedInARow,
+  paceNote,
   parseDuration,
   prevDay,
   shouldPing,
@@ -134,6 +135,7 @@ const clock = (ms: number) =>
 
 // ponytail: in-memory, so a restart forgets pings and snoozes; move to a DB table if that gets annoying
 const lastPing = new Map<string, LastPing>();
+const lastDone = new Map<string, number>(); // goal id -> when you last logged it (ms)
 const snoozed = new Map<string, number>(); // goal id, or "*" for all -> snoozed until (ms)
 const snoozedUntil = (goalId: string) => Math.max(snoozed.get(goalId) ?? 0, snoozed.get("*") ?? 0);
 
@@ -168,8 +170,10 @@ bot.command("done", (ctx) => {
   if (!Number.isInteger(count) || count < 1 || count > 100) return ctx.reply("Count must be a whole number from 1 to 100.");
 
   db.prepare("INSERT INTO logs (goal_id, count, day) VALUES (?, ?, ?)").run(goal.id, count, today());
+  lastDone.set(goal.id, Date.now()); // you're working: the heartbeat leaves this goal alone for a while
   const done = doneToday(goal.id);
-  return ctx.reply(`${goal.id}: ${done}/${goal.target} today${done >= goal.target ? ` ✅${fire(streakFor(goal.id, goal.target))}` : ""}`);
+  const streakNote = done >= goal.target ? fire(streakFor(goal.id, goal.target)) : "";
+  return ctx.reply(`${goal.id}: ${done}/${goal.target} · ${paceNote(goal, done, nowMin())}${streakNote}`);
 });
 
 bot.command("status", (ctx) => {
@@ -230,9 +234,14 @@ bot.command("remember", (ctx) => {
 });
 
 // Everything the nudge writer gets. Shared by the heartbeat and /preview, so a preview is exactly what a real ping would be.
-function nudgeStats(g: Goal, done: number, minsLeft: number) {
-  // Same rule the window-close check uses, so the warning only appears when it would really happen
-  const warn = partnerId && g.tellPartnerAfterMisses && !partnerRow(g.id)?.reason && missesFor(g.id, g.target) >= g.tellPartnerAfterMisses;
+function nudgeStats(g: Goal, done: number, minsLeft: number, level: Level) {
+  // Only at last call, and only when the window-close rule would really fire. Earlier nudges stay about the work.
+  const warn =
+    level === "last" &&
+    partnerId &&
+    g.tellPartnerAfterMisses &&
+    !partnerRow(g.id)?.reason &&
+    missesFor(g.id, g.target) >= g.tellPartnerAfterMisses;
   return {
     ...g,
     done,
@@ -308,7 +317,7 @@ bot.command("preview", async (ctx) => {
   if (!g || !isLevel(level)) return ctx.reply(PREVIEW_USAGE());
   await ctx.sendChatAction("typing");
   const { minsLeft } = windowProgress(g.windows, nowMin());
-  const text = await nudge(level, nudgeStats(g, doneToday(g.id), minsLeft), recentFor(g.id, "nudge"));
+  const text = await nudge(level, nudgeStats(g, doneToday(g.id), minsLeft, level), recentFor(g.id, "nudge"));
   return ctx.reply(`${header(level)}\n\n${text}`);
 });
 
@@ -336,10 +345,10 @@ async function heartbeat() {
       await tellPartnerIfMissed(g, done, min); // before the snooze check on purpose
 
       if (snoozedUntil(g.id) > ms) continue;
-      const ping = shouldPing(g, done, min, ms, config.quietHours, lastPing.get(g.id));
+      const ping = shouldPing(g, done, min, ms, config.quietHours, lastPing.get(g.id), lastDone.get(g.id));
       if (!ping) continue;
 
-      await send(chatId, g.id, "nudge", await nudge(ping.level, nudgeStats(g, done, ping.minsLeft), recentFor(g.id, "nudge")));
+      await send(chatId, g.id, "nudge", await nudge(ping.level, nudgeStats(g, done, ping.minsLeft, ping.level), recentFor(g.id, "nudge")));
       lastPing.set(g.id, { at: ms, level: ping.level });
     } catch (err) {
       console.error(`heartbeat: failed on ${g.id}`, err);

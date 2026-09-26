@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import OpenAI from "openai";
-import { checkDraft, type Level, type Range } from "./rules.js";
+import { checkDraft, type Level, nextStep, type Range } from "./rules.js";
 
 type Stats = {
   id: string;
@@ -93,7 +93,9 @@ const llm = llmEnabled
   : null;
 
 const SYSTEM = `You write short Telegram messages for a personal accountability bot.
-Default persona (the profile below can override it): a blunt friend. Casual, teasing, a little savage, always clearly on the user's side. Never preachy, never corporate, no motivational-poster lines.
+Default persona (the profile can adjust it): a direct, supportive friend. Honest about the gap, warm about the person, clearly on the user's side. Never preachy, never corporate, no motivational-poster lines.
+Respect is not optional, whatever the profile says: never insult, mock, belittle or show contempt (no "drama", "crying", "shut up and work", no jabs at their life choices), and never threaten. Pressure comes from facts and their own goals, not from put-downs.
+Be useful: every nudge gives ONE concrete, small next step they can start right now (the "next small step" fact), and makes starting feel easy.
 Default language: plain, casual English, unless the profile says otherwise.
 Use the profile to make it land: their real reasons, what works and doesn't work on them, their patterns. Use it, don't recite it.
 Every request names its reader. Match language and tone to that reader:
@@ -102,7 +104,8 @@ Every request names its reader. Match language and tone to that reader:
 Hard rules:
 - 1-3 short sentences. No hashtags, no quotes around the whole message, no preamble. Output only the message.
 - Only use numbers that appear in the facts or the profile. Never invent stats.
-- Include every "must include" string exactly as written.`;
+- Include every "must include" string exactly as written.
+- Your recent messages are shown only so you don't repeat their wording. Don't copy their tone or phrases.`;
 
 type Job = {
   reader: "user" | "partner";
@@ -125,7 +128,7 @@ async function write(job: Job): Promise<string> {
     `Task: ${job.task}`,
     `Facts:\n${facts}`,
     `Must include: ${job.must.map((m) => `"${m}"`).join(", ")}`,
-    job.recent.length && `Your recent messages about this (don't repeat them; you can build on them):\n${job.recent.map((r) => `- ${r}`).join("\n")}`,
+    job.recent.length && `Your recent messages about this (don't reuse their wording or tone):\n${job.recent.map((r) => `- ${r}`).join("\n")}`,
     `Plain fallback version, for reference only: ${job.fallback}`,
   ]
     .filter(Boolean)
@@ -160,23 +163,26 @@ async function write(job: Job): Promise<string> {
 
 export function nudge(level: Level, s: Stats, recent: string[]) {
   const remaining = s.target - s.done;
+  const step = nextStep(s.target, s.done, s.minsPerUnit);
   const facts = [
     `goal: ${s.id}`,
     `why it matters: ${s.why}`,
     `done today: ${s.done}/${s.target}`,
-    `remaining: ${remaining} (~${remaining * s.minsPerUnit} min at ${s.minsPerUnit} min each)`,
+    `next small step (lead with this): do ${step.units} now, ~${step.mins} min. This is only a first chunk, NOT what's left.`,
+    `total still left today: ${remaining} (background only; never call the small step "what's left")`,
     `window time left today (${fmtWin(s.windows)}): ${fmtLeft(s.minsLeft)}`,
     `urgency: ${level} (soft = slightly behind pace, firm = clearly behind, last = final hour)`,
     `reminders already sent about this goal today: ${s.pingsToday}`,
   ];
   if (s.streak > 0) facts.push(`current streak: ${s.streak} days, breaks if today is missed`);
-  if (s.warnPartner) facts.push(`if they miss today, you will tell ${s.warnPartner} when today's last window closes. /excuse <reason> lets them explain first.`);
+  // Only set at last call. Mention it once, calmly, as information, not as a threat.
+  if (s.warnPartner) facts.push(`if the goal is still unmet when today's last window closes, ${s.warnPartner} gets a note. /excuse <reason> lets them explain first.`);
 
   return write({
     reader: "user",
-    task: "Nudge the user to make progress on this goal right now.",
+    task: "Nudge the user to make progress on this goal right now: name where they are, then the next small step.",
     facts,
-    must: [`${s.done}/${s.target}`, ...(s.warnPartner ? [s.warnPartner, "/excuse"] : [])],
+    must: [`${s.done}/${s.target}`, ...(s.warnPartner ? ["/excuse"] : [])],
     recent,
     fallback: template(level, s),
   });
@@ -250,7 +256,7 @@ export function nightRecap(lines: DayLine[], recent: string[], partner: string) 
 export function toldNudge(p: { partner: string; id: string; done: number; target: number }, partnerMsg: string) {
   return write({
     reader: "user",
-    task: `Tell the user you just reported their missed goal to ${p.partner}. Rub it in a little, then point them at tomorrow. Paraphrase what they were told in your own voice for the user; don't copy its language or style.`,
+    task: `Tell the user you just reported their missed goal to ${p.partner}. Say it plainly and kindly, no gloating, then give one small first step for tomorrow. Paraphrase what they were told in your own voice for the user; don't copy its language or style.`,
     facts: [`goal: ${p.id}`, `done today: ${p.done}/${p.target}`, `what you sent ${p.partner}: "${partnerMsg}"`],
     must: [p.partner],
     recent: [],

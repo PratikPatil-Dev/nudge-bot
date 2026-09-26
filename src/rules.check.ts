@@ -6,6 +6,8 @@ import {
   inRange,
   isLevel,
   missedInARow,
+  nextStep,
+  paceNote,
   parseDuration,
   type Range,
   shouldPing,
@@ -85,5 +87,21 @@ assert.match(checkDraft("1/5 " + "a".repeat(600), ["1/5"], facts) ?? "", /too lo
 
 assert.ok(dueNow(t("08:00"), "08:00") && dueNow(t("09:59"), "08:00"), "due within grace");
 assert.ok(!dueNow(t("07:59"), "08:00") && !dueNow(t("10:00"), "08:00") && !dueNow(t("15:00"), "08:00"), "not due outside grace");
+
+// Just logged progress -> no nudge for 45 min, whatever the level
+assert.equal(shouldPing(goal, 1, t("15:00"), now, quiet, undefined, ago(20)), null, "active 20 min ago");
+assert.equal(shouldPing(goal, 3, t("19:30"), now, quiet, undefined, ago(20)), null, "even a last call waits");
+assert.equal(shouldPing(goal, 1, t("15:00"), now, quiet, undefined, ago(50))?.level, "firm", "quiet period over");
+
+assert.deepEqual(nextStep(30, 13, 3), { units: 3, mins: 9 }, "3 applications, not all 17");
+assert.deepEqual(nextStep(30, 29, 3), { units: 1, mins: 3 }, "never more than what's left");
+assert.deepEqual(nextStep(90, 0, 1), { units: 10, mins: 10 }, "minute goals: a 10-minute block");
+assert.deepEqual(nextStep(5, 0, 30), { units: 1, mins: 30 }, "at least one unit");
+
+const day = { target: 30, windows: [["06:00", "20:00"]] as Range[] }; // 840 min
+assert.equal(paceNote(day, 13, t("14:00")), "4 behind pace", "expected 17 at 14:00");
+assert.equal(paceNote(day, 17, t("14:00")), "on pace 👍");
+assert.equal(paceNote(day, 30, t("14:00")), "done for today ✅");
+assert.equal(paceNote(day, 0, t("05:00")), "window opens at 06:00");
 
 console.log("rules: all checks passed");

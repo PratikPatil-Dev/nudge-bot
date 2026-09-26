@@ -5,6 +5,9 @@ export type LastPing = { at: number; level: Level };
 
 const RANK: Record<Level, number> = { soft: 0, firm: 1, last: 2 };
 const COOLDOWN_MS = 60 * 60_000;
+// Quiet period after a /done. Under an hour so a last call can still land before the window closes.
+const ACTIVE_MS = 45 * 60_000;
+const STEP_MINS = 10; // size of the "next small step" a nudge asks for
 
 export const toMin = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 
@@ -45,8 +48,11 @@ export function shouldPing(
   nowMs: number,
   quietHours: Range,
   last?: LastPing,
+  lastDoneMs?: number,
 ): { level: Level; minsLeft: number } | null {
   if (done >= goal.target || inRange(nowMin, quietHours)) return null;
+  // You just logged progress: you're working, so don't nag, even if still behind pace
+  if (lastDoneMs !== undefined && nowMs - lastDoneMs < ACTIVE_MS) return null;
   const { total, elapsed, inside, minsLeft } = windowProgress(goal.windows, nowMin);
   if (!inside) return null;
 
@@ -63,6 +69,21 @@ export function shouldPing(
   if (last && RANK[level] <= RANK[last.level] && nowMs - last.at < COOLDOWN_MS) return null;
 
   return { level, minsLeft };
+}
+
+// The small, doable ask a nudge leads with (~10 minutes of work), instead of the whole remaining pile
+export function nextStep(target: number, done: number, minsPerUnit: number) {
+  const units = Math.min(Math.max(target - done, 0), Math.max(1, Math.floor(STEP_MINS / minsPerUnit)));
+  return { units, mins: Math.round(units * minsPerUnit) };
+}
+
+// One line for the /done reply: where you stand against the pace right now
+export function paceNote(goal: { target: number; windows: Range[] }, done: number, nowMin: number) {
+  if (done >= goal.target) return "done for today ✅";
+  const { total, elapsed } = windowProgress(goal.windows, nowMin);
+  if (elapsed === 0) return `window opens at ${goal.windows[0]![0]}`;
+  const behind = Math.floor(goal.target * (elapsed / total)) - done;
+  return behind > 0 ? `${behind} behind pace` : "on pace 👍";
 }
 
 // "30m" / "2h" -> ms, capped at 24h. Anything else -> null.
