@@ -1,0 +1,27 @@
+{
+  "timezone": "Europe/London",
+  "quietHours": ["23:00", "07:00"],
+  "morning": "07:30",
+  "recap": "22:00",
+  "me": "Alex",
+  "partner": "Sam",
+  "goals": [
+    {
+      "id": "apply",
+      "label": "job applications",
+      "target": 10,
+      "windows": [["08:00", "18:00"]],
+      "why": "Land a new role this quarter. Every application counts, big or small.",
+      "minsPerUnit": 5,
+      "tellPartnerAfterMisses": 2
+    },
+    {
+      "id": "study",
+      "label": "minutes of study",
+      "target": 60,
+      "windows": [["18:30", "19:15"], ["20:00", "20:45"]],
+      "why": "Interview prep. Counted in minutes: /done study 30 after a session.",
+      "minsPerUnit": 1
+    }
+  ]
+}

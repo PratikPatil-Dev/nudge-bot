@@ -1,0 +1,10 @@
+services:
+  bot:
+    image: ghcr.io/pratikpatil-dev/nudge-bot:latest
+    container_name: nudge
+    env_file: .env
+    # Personal files live only on the VM and survive redeploys: goals, history (data/nudge.db), profile (data/profile.md)
+    volumes:
+      - ./goals.json:/app/goals.json:ro
+      - ./data:/app/data
+    restart: unless-stopped
